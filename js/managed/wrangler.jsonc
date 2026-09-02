@@ -34,12 +34,7 @@
       "bucket_name": "nanocodex-managed-history"
     }
   ],
-  "ai_search": [
-    {
-      "binding": "HISTORY_AI_SEARCH",
-      "instance_name": "nanocodex-history-dev-20260824"
-    }
-  ],
+  "ai_search": [],
   "durable_objects": {
     "bindings": [
       {
