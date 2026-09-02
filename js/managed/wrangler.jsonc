@@ -26,6 +26,10 @@
     {
       "binding": "NANOCODEX",
       "service": "nanocodex-egress"
+    },
+    {
+      "binding": "NANOCODEX_COMPUTE_OUTBOUND_AUTH",
+      "service": "spaces-managed-agent"
     }
   ],
   "r2_buckets": [
@@ -104,7 +108,8 @@
   ],
   "vars": {
     "AGENT_IDLE_TIMEOUT_MS": "30000",
-    "NANOCODEX_COMPUTE_PROVIDER": "cloudflare"
+    "NANOCODEX_COMPUTE_PROVIDER": "cloudflare",
+    "NANOCODEX_COMPUTE_OUTBOUND_AUTH_HOSTS": "commonsdiy.code.storage"
   },
   "env": {
     "development": {
