@@ -317,8 +317,12 @@ export class HostedToolsBroker {
     await this.webSocketMessage(socket, message);
   }
 
-  close(socket: WebSocket, reason: string): void {
-    if (this.handles(socket)) this.#retire(socket, reason);
+  close(socket: WebSocket, reason: string, code?: number): void {
+    if (!this.handles(socket)) return;
+    console.warn(code === undefined
+      ? { type: "managed.hosted_tools_transport_failed" }
+      : { type: "managed.hosted_tools_transport_closed", code });
+    this.#retire(socket, reason);
   }
 
   shutdown(reason: string): void {
@@ -383,18 +387,13 @@ export class HostedToolsBroker {
 
   webSocketClose(socket: WebSocket, code: number, reason: string): void {
     if (!this.handles(socket)) return;
-    console.warn({
-      type: "managed.hosted_tools_transport_closed",
-      code,
-    });
-    this.#retire(socket, reason || `peer closed with code ${code}`);
+    this.close(socket, reason || `peer closed with code ${code}`, code);
     closeSocket(socket, code, reason || "Hosted Tools peer closed");
   }
 
   webSocketError(socket: WebSocket): void {
     if (!this.handles(socket)) return;
-    console.warn({ type: "managed.hosted_tools_transport_failed" });
-    this.#retire(socket, "WebSocket failed");
+    this.close(socket, "WebSocket failed");
     closeSocket(socket, 1011, "Hosted Tools WebSocket failed");
   }
 

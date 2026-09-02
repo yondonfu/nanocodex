@@ -2217,7 +2217,7 @@ export class DurableAgentSession extends DurableComputerSession {
 
   webSocketClose(socket: WebSocket, code: number, reason: string): void {
     if (this.#hostedTools.owns(socket)) {
-      this.#hostedTools.close(socket, reason || "peer closed");
+      this.#hostedTools.close(socket, reason || "peer closed", code);
     } else {
       this.#retireDeviceHost(socket, reason || "peer closed");
     }
