@@ -73,6 +73,7 @@ import {
   ManagedPortabilityArchive,
   type ManagedPortableArchiveIdentity,
 } from "./managed-portability-archive";
+import { managedRuntimeEventObservation } from "./managed-event-observation";
 import { webAsset } from "./web";
 import {
   MultiplayerRoom,
@@ -5285,6 +5286,19 @@ export class DurableAgentSession extends DurableComputerSession {
     }
   }
 
+  #observeRuntimeEvent(event: DurableEvent<StreamMessage>): void {
+    try {
+      const observation = managedRuntimeEventObservation({
+        cursor: event.cursor,
+        turnId: event.turn_id,
+        message: event.message,
+      });
+      if (observation) console.info({ type: "managed.runtime_event", ...observation });
+    } catch {
+      // Diagnostics must never change durable event-stream behavior.
+    }
+  }
+
   #scheduleHistoryProjection(): void {
     if (this.#deleting || this.#historyProjectionTask) return;
     const task = this.#drainHistoryProjections();
@@ -5397,6 +5411,7 @@ export class DurableAgentSession extends DurableComputerSession {
         this.#eventLog.append(message, turnId),
       );
       this.#publish(event);
+      this.#observeRuntimeEvent(event);
     } catch (error) {
       this.#failEventStream(error);
     }
