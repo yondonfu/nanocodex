@@ -1,5 +1,6 @@
 import { getSandbox, type Sandbox } from "@cloudflare/sandbox";
 import type { Workspace } from "nanocodex/workspace";
+import { cloudflareSandboxId } from "./cloudflare-sandbox-id";
 
 const ROOT = "/workspace";
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -86,16 +87,15 @@ export function createCloudflareSandboxComputerProvider(options: Readonly<{
 }>): ManagedComputerProvider {
   return createMachineComputerProvider({
     workspace: options.workspace,
-    createMachine: async () => cloudflareMachine(getSandbox(
-      options.namespace,
-      `nanocodex-compute-${options.sessionId}`,
-      {
+    createMachine: async () => {
+      const sandboxId = await cloudflareSandboxId("nanocodex-compute", options.sessionId);
+      return cloudflareMachine(getSandbox(options.namespace, sandboxId, {
         normalizeId: true,
         sleepAfter: "10m",
         transport: "rpc",
-        labels: { application: "nanocodex", session: options.sessionId, purpose: "compute" },
-      },
-    )),
+        labels: { application: "nanocodex", session: sandboxId, purpose: "compute" },
+      }));
+    },
   });
 }
 

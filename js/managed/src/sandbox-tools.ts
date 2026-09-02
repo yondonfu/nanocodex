@@ -1,5 +1,6 @@
 import { getSandbox, type Sandbox } from "@cloudflare/sandbox";
 import type { ToolMap } from "nanocodex";
+import { cloudflareSandboxId } from "./cloudflare-sandbox-id";
 
 const WORKSPACE = "/workspace";
 const MAX_COMMAND_CHARS = 32 * 1024;
@@ -79,7 +80,7 @@ export async function destroyCloudflareSandbox(
   namespace: DurableObjectNamespace<Sandbox>,
   sessionId: string,
 ): Promise<void> {
-  await sandboxHandle(namespace, sessionId).destroy();
+  await (await sandboxHandle(namespace, sessionId)).destroy();
 }
 
 export function createCloudflareSandboxTools(
@@ -303,7 +304,7 @@ export async function proxyCloudflareSandboxPreview(
   const targetPath = path.startsWith("/") ? path : `/${path}`;
   const target = new URL(`http://sandbox.internal${targetPath}${incoming.search}`);
   const forwarded = new Request(target, request);
-  const sandbox = sandboxHandle(namespace, sessionId);
+  const sandbox = await sandboxHandle(namespace, sessionId);
   if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
     return sandbox.wsConnect(forwarded, port);
   }
@@ -357,7 +358,7 @@ async function prepareSandbox(
   sessionId: string,
   localBucket: boolean,
 ): Promise<Sandbox> {
-  const sandbox = sandboxHandle(namespace, sessionId);
+  const sandbox = await sandboxHandle(namespace, sessionId);
   try {
     await sandbox.mountBucket("NANOCODEX_WORKSPACES", WORKSPACE, {
       prefix: `/sessions/${sessionId}/`,
@@ -369,15 +370,16 @@ async function prepareSandbox(
   return sandbox;
 }
 
-function sandboxHandle(
+async function sandboxHandle(
   namespace: DurableObjectNamespace<Sandbox>,
   sessionId: string,
-): Sandbox {
-  return getSandbox(namespace, `nanocodex-${sessionId}`, {
+): Promise<Sandbox> {
+  const sandboxId = await cloudflareSandboxId("nanocodex", sessionId);
+  return getSandbox(namespace, sandboxId, {
     normalizeId: true,
     sleepAfter: "10m",
     transport: "rpc",
-    labels: { application: "nanocodex", session: sessionId },
+    labels: { application: "nanocodex", session: sandboxId },
   });
 }
 
