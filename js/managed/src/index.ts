@@ -40,6 +40,7 @@ import { drainRuntimeForDeletion } from "./deletion-runtime";
 import { createManagedComputerRuntime } from "./computer-runtime";
 import {
   configuredComputerProvider,
+  registerConfiguredComputerOutboundContext,
   type ManagedComputeProviderEnv,
 } from "./computer-provider-config";
 import type { ManagedEgressConnectorId } from "./managed-egress";
@@ -88,7 +89,7 @@ import {
 } from "./multiplayer-quota";
 export { MultiplayerQuota } from "./multiplayer-quota";
 export { WorkspaceServiceProxy };
-export { Sandbox } from "@cloudflare/sandbox";
+export { ContainerProxy, Sandbox } from "./sandbox-outbound-auth";
 
 import {
   type ActiveTurn,
@@ -4579,12 +4580,14 @@ export class DurableAgentSession extends DurableComputerSession {
     const multiplayer = session.runtime_profile === "multiplayer";
     if (!multiplayer) await this.#ensureCredentialBinding(session);
     const workspace = await getWorkspace(this);
+    const computeContext = { runtimeId: this.ctx.id.toString(), sessionId: session.session_id };
+    await registerConfiguredComputerOutboundContext(this.env, computeContext);
     // Shared-room members can all admit turns. Never attach the room owner's
     // connector capability to that shared tool runtime: provider destinations
     // fail closed without a subject, while ordinary public HTTP remains usable.
     const computer = await createManagedComputerRuntime({
       computer: workspace,
-      computerProvider: configuredComputerProvider(this.env, this.ctx.id.toString()),
+      computerProvider: configuredComputerProvider(this.env, computeContext),
       egress: this.env.NANOCODEX,
       ...(multiplayer ? {} : { subject: this.ctx.id.toString() }),
       connectorAllowed: (connector) => this.#activeTurnConnectorAllowed(connector),

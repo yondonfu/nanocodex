@@ -15,7 +15,11 @@ export type ManagedComputeProviderEnv = Readonly<{
   NANOCODEX_IX_BROKER_TOKEN?: string;
   NANOCODEX_IX_BROKER_URL?: string;
   NANOCODEX_IX_REGION?: string;
+  NANOCODEX_COMPUTE_OUTBOUND_AUTH?: Fetcher;
+  NANOCODEX_COMPUTE_OUTBOUND_AUTH_HOSTS?: string;
 }>;
+
+export type ManagedComputeSessionContext = Readonly<{ runtimeId: string; sessionId: string }>;
 
 export type ManagedComputerProviderFactory =
   (workspace: Workspace) => ManagedComputerProvider;
@@ -27,8 +31,9 @@ export type ManagedComputerProviderFactory =
  */
 export function configuredComputerProvider(
   env: ManagedComputeProviderEnv,
-  sessionId: string,
+  context: ManagedComputeSessionContext | string,
 ): ManagedComputerProviderFactory | undefined {
+  const { runtimeId } = computeContext(context);
   switch (env.NANOCODEX_COMPUTE_PROVIDER) {
     case undefined:
       return undefined;
@@ -39,7 +44,7 @@ export function configuredComputerProvider(
       }
       return (workspace) => createCloudflareSandboxComputerProvider({
         namespace,
-        sessionId,
+        sessionId: runtimeId,
         workspace,
       });
     }
@@ -51,7 +56,7 @@ export function configuredComputerProvider(
       return (workspace) => createIxBrokerComputerProvider({
         brokerToken,
         brokerUrl,
-        name: ixMachineName(sessionId),
+        name: ixMachineName(runtimeId),
         ...(env.NANOCODEX_IX_REGION === undefined
           ? {}
           : { region: env.NANOCODEX_IX_REGION }),
@@ -59,6 +64,33 @@ export function configuredComputerProvider(
       });
     }
   }
+}
+
+export async function registerConfiguredComputerOutboundContext(
+  env: ManagedComputeProviderEnv,
+  context: ManagedComputeSessionContext,
+): Promise<void> {
+  if (env.NANOCODEX_COMPUTE_PROVIDER !== "cloudflare"
+    || !env.NANOCODEX_COMPUTE_OUTBOUND_AUTH_HOSTS) return;
+  const namespace = env.NANOCODEX_COMPUTE_SANDBOX;
+  const binding = env.NANOCODEX_COMPUTE_OUTBOUND_AUTH;
+  if (!namespace) throw new Error("NANOCODEX_COMPUTE_SANDBOX is required for cloudflare compute");
+  if (!binding) throw new Error("NANOCODEX_COMPUTE_OUTBOUND_AUTH is required when auth hosts are configured");
+  const containerId = namespace.idFromName(cloudflareSandboxName(context.runtimeId)).toString();
+  const response = await binding.fetch("https://outbound-auth.internal/v1/context", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ containerId, sessionId: context.sessionId }),
+  });
+  if (!response.ok) throw new Error(`compute outbound context registration failed (${response.status})`);
+}
+
+export function cloudflareSandboxName(runtimeId: string): string {
+  return `nanocodex-compute-${runtimeId}`;
+}
+
+function computeContext(context: ManagedComputeSessionContext | string): ManagedComputeSessionContext {
+  return typeof context === "string" ? { runtimeId: context, sessionId: context } : context;
 }
 
 function ixMachineName(sessionId: string): string {
