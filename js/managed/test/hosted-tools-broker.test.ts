@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { hostedToolCatalogDigest } from "nanocodex/tools/hosted-catalog";
 
 import {
@@ -125,6 +125,7 @@ describe("HostedToolsBroker socket-owned protocol", () => {
   });
 
   it("keeps the active catalog when a replacement candidate fails parity validation", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fixture = createFixture();
     const first = fixture.socket();
     await catalog(fixture.broker, first);
@@ -138,6 +139,12 @@ describe("HostedToolsBroker socket-owned protocol", () => {
       tools: [{ ...entry(), provider: "rejected" }],
     }));
     expect(candidate.closed).toMatchObject({ code: 1008, reason: expect.stringContaining("parity failed") });
+    expect(warn).toHaveBeenCalledWith({
+      type: "managed.hosted_tools_protocol_failed",
+      code: "catalog_contract_mismatch",
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("same-name parity failed");
+    warn.mockRestore();
     expect(first.closed).toBeUndefined();
     expect(fixture.broker.provider().resolve("fixture__lookup")).toBeDefined();
   });

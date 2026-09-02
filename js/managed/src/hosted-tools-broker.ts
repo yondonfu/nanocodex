@@ -373,6 +373,10 @@ export class HostedToolsBroker {
       const protocol = error instanceof HostedToolsProtocolError
         ? error
         : new HostedToolsProtocolError("broker_failure", errorMessage(error));
+      console.warn({
+        type: "managed.hosted_tools_protocol_failed",
+        code: protocol.code,
+      });
       this.#fence(socket, `${protocol.code}: ${protocol.message}`);
     }
   }
