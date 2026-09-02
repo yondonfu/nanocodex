@@ -312,6 +312,7 @@ describe("HostedToolsBroker socket-owned protocol", () => {
   });
 
   it("marks dispatched calls ambiguous after unexpected transport loss", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fixture = createFixture();
     const host = fixture.socket();
     await catalog(fixture.broker, host);
@@ -323,6 +324,24 @@ describe("HostedToolsBroker socket-owned protocol", () => {
       structuredResult: { status: "ambiguous" },
     });
     expect(fixture.persistence.call(IDS[1]!)?.state).toBe("ambiguous");
+    expect(warn).toHaveBeenCalledWith({
+      type: "managed.hosted_tools_transport_closed",
+      code: 1006,
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("network lost");
+    warn.mockRestore();
+  });
+
+  it("logs hosted-tool transport errors without error details", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fixture = createFixture();
+    const host = fixture.socket();
+
+    fixture.broker.webSocketError(host.webSocket);
+
+    expect(warn).toHaveBeenCalledWith({ type: "managed.hosted_tools_transport_failed" });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("WebSocket failed");
+    warn.mockRestore();
   });
 
   it("preserves pre-admission fallback and does not reroute a selected stale binding", async () => {

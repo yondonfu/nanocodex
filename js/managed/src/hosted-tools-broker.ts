@@ -383,12 +383,17 @@ export class HostedToolsBroker {
 
   webSocketClose(socket: WebSocket, code: number, reason: string): void {
     if (!this.handles(socket)) return;
+    console.warn({
+      type: "managed.hosted_tools_transport_closed",
+      code,
+    });
     this.#retire(socket, reason || `peer closed with code ${code}`);
     closeSocket(socket, code, reason || "Hosted Tools peer closed");
   }
 
   webSocketError(socket: WebSocket): void {
     if (!this.handles(socket)) return;
+    console.warn({ type: "managed.hosted_tools_transport_failed" });
     this.#retire(socket, "WebSocket failed");
     closeSocket(socket, 1011, "Hosted Tools WebSocket failed");
   }
