@@ -1475,6 +1475,17 @@ export class DurableAgentSession extends DurableComputerSession {
       entryAllowed: (entry, connectGrantId, appToolCatalogDigest) => (
         this.#activeTurnHostedToolAllowed(entry, connectGrantId, appToolCatalogDigest)
       ),
+      onCatalogWillActivate: () => {
+        // ToolRouter snapshots callable contracts when its owning agent is
+        // constructed. A replacement hosted-tool socket may publish a new
+        // immutable catalog, so retire an idle cached agent before catalog
+        // acknowledgement and let the next admission rebuild that snapshot.
+        // Never disturb active work; a later catalog replacement or normal
+        // lifecycle recovery will refresh it.
+        if (this.#turns.size > 0 || this.#pendingTurnIds.size > 0
+          || this.#managedRealtimeSession() !== undefined) return;
+        this.ctx.waitUntil(this.#shutdownAgent());
+      },
     });
     this.#eventLog = new DurableEventLog<StreamMessage>(this.ctx.storage);
     this.#eventArchive = new ManagedEventArchive<StreamMessage>(

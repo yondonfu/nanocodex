@@ -50,6 +50,17 @@ describe("HostedToolsBroker socket-owned protocol", () => {
     expect(host.sent).not.toContainEqual(expect.objectContaining({ type: "fenced" }));
   });
 
+  it("runs catalog activation lifecycle work before acknowledging ready", async () => {
+    let activated = false;
+    const fixture = createFixture(undefined, () => { activated = true; });
+    const host = fixture.socket();
+    host.onSend = (frame) => {
+      if (frame.type === "ready") expect(activated).toBe(true);
+    };
+    await catalog(fixture.broker, host);
+    expect(activated).toBe(true);
+  });
+
   it("durably dispatches an exact call and ACKs both the result and duplicate receipt", async () => {
     const fixture = createFixture();
     const host = fixture.socket();
@@ -358,6 +369,7 @@ function createFixture(
     connectGrantId?: string,
     appToolCatalogDigest?: string,
   ) => boolean,
+  onCatalogWillActivate?: () => void,
 ) {
   const persistence = new MemoryPersistence();
   const sockets: FakeSocket[] = [];
@@ -371,6 +383,7 @@ function createFixture(
     persistence,
     now: () => NOW,
     ...(entryAllowed === undefined ? {} : { entryAllowed }),
+    ...(onCatalogWillActivate === undefined ? {} : { onCatalogWillActivate }),
     randomUUID: () => ids.shift() ?? crypto.randomUUID(),
   });
   return {

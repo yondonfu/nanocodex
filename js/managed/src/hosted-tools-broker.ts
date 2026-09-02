@@ -183,6 +183,7 @@ export type HostedToolsBrokerOptions = Readonly<{
   maxCallsPerGeneration?: number;
   persistence?: HostedToolsBrokerPersistence;
   onCatalogChanged?: (definitions: readonly HostedToolsProviderDefinition[]) => void;
+  onCatalogWillActivate?: (definitions: readonly HostedToolsCatalogCandidate[]) => void;
   entryAllowed?: (
     entry: HostedToolCatalogEntry,
     connectGrantId?: string,
@@ -200,6 +201,7 @@ export class HostedToolsBroker {
   readonly #maxCallsPerGeneration: number;
   readonly #persistence: HostedToolsBrokerPersistence;
   readonly #onCatalogChanged?: (definitions: readonly HostedToolsProviderDefinition[]) => void;
+  readonly #onCatalogWillActivate?: (definitions: readonly HostedToolsCatalogCandidate[]) => void;
   readonly #entryAllowed: (
     entry: HostedToolCatalogEntry,
     connectGrantId?: string,
@@ -226,6 +228,7 @@ export class HostedToolsBroker {
     }
     this.#persistence = options.persistence ?? new SqlHostedToolsPersistence(context.storage);
     this.#onCatalogChanged = options.onCatalogChanged;
+    this.#onCatalogWillActivate = options.onCatalogWillActivate;
     this.#entryAllowed = options.entryAllowed ?? (() => true);
     const retired = this.#persistence.initialize(this.#now());
     this.#nextCandidateGeneration = this.#persistence.state().generation;
@@ -525,6 +528,7 @@ export class HostedToolsBroker {
       if (validator !== undefined && validator(candidateDefinitions) !== true) {
         throw new Error("ToolRouter rejected the candidate catalog");
       }
+      this.#onCatalogWillActivate?.(candidateDefinitions);
     } catch (error) {
       throw new HostedToolsProtocolError(
         "catalog_contract_mismatch",
