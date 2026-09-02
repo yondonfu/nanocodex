@@ -6,6 +6,7 @@ import {
   type ManagedComputerProvider,
 } from "./computer-provider";
 import { createIxBrokerComputerProvider } from "./computer-provider-ix";
+import { cloudflareSandboxId } from "./cloudflare-sandbox-id";
 
 export type ManagedComputeProviderKind = "cloudflare" | "ix";
 
@@ -76,7 +77,7 @@ export async function registerConfiguredComputerOutboundContext(
   const binding = env.NANOCODEX_COMPUTE_OUTBOUND_AUTH;
   if (!namespace) throw new Error("NANOCODEX_COMPUTE_SANDBOX is required for cloudflare compute");
   if (!binding) throw new Error("NANOCODEX_COMPUTE_OUTBOUND_AUTH is required when auth hosts are configured");
-  const containerId = namespace.idFromName(cloudflareSandboxName(context.runtimeId)).toString();
+  const containerId = namespace.idFromName(await cloudflareSandboxName(context.runtimeId)).toString();
   const response = await binding.fetch("https://outbound-auth.internal/v1/context", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -85,8 +86,8 @@ export async function registerConfiguredComputerOutboundContext(
   if (!response.ok) throw new Error(`compute outbound context registration failed (${response.status})`);
 }
 
-export function cloudflareSandboxName(runtimeId: string): string {
-  return `nanocodex-compute-${runtimeId}`;
+export function cloudflareSandboxName(runtimeId: string): Promise<string> {
+  return cloudflareSandboxId("nanocodex-compute", runtimeId);
 }
 
 function computeContext(context: ManagedComputeSessionContext | string): ManagedComputeSessionContext {

@@ -69,7 +69,36 @@ describe("managed compute provider configuration", () => {
       url: "https://outbound-auth.internal/v1/context",
       body: { containerId: "do:nanocodex-compute-runtime-1", sessionId: "session-1" },
     }]);
-    expect(cloudflareSandboxName("runtime-1")).toBe("nanocodex-compute-runtime-1");
+    await expect(cloudflareSandboxName("runtime-1")).resolves.toBe("nanocodex-compute-runtime-1");
+  });
+
+  it("registers the same bounded container identity for a long runtime id", async () => {
+    const runtimeId = `account:${"a".repeat(80)}`;
+    let registeredName = "";
+    let registeredContainer = "";
+    const namespace = {
+      idFromName(name: string) {
+        registeredName = name;
+        return { toString: () => `do:${name}` };
+      },
+    } as unknown as DurableObjectNamespace<import("@cloudflare/sandbox").Sandbox>;
+    const binding = {
+      async fetch(_input: RequestInfo | URL, init?: RequestInit) {
+        registeredContainer = String((JSON.parse(String(init?.body)) as { containerId: string }).containerId);
+        return new Response(null, { status: 204 });
+      },
+    } as unknown as Fetcher;
+
+    await registerConfiguredComputerOutboundContext({
+      NANOCODEX_COMPUTE_PROVIDER: "cloudflare",
+      NANOCODEX_COMPUTE_SANDBOX: namespace,
+      NANOCODEX_COMPUTE_OUTBOUND_AUTH: binding,
+      NANOCODEX_COMPUTE_OUTBOUND_AUTH_HOSTS: "git.example.test",
+    }, { runtimeId, sessionId: "session-1" });
+
+    expect(registeredName).toHaveLength(63);
+    expect(registeredContainer).toBe(`do:${registeredName}`);
+    await expect(cloudflareSandboxName(runtimeId)).resolves.toBe(registeredName);
   });
 
   it("fails closed when outbound auth hosts lack a service binding", async () => {
