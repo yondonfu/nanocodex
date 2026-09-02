@@ -346,6 +346,11 @@ export class HostedToolsBroker {
     if (allowedMcpIds !== undefined && !isConnectGrantId(connectGrantId)) {
       throw new TypeError("Connect Hosted Tools requires an exact grant ID");
     }
+    for (const existing of this.context.getWebSockets(SOCKET_TAG)) {
+      const attachment = this.#attachment(existing);
+      if (attachment?.leaseId !== undefined || attachment?.generation !== undefined) continue;
+      closeSocket(existing, 1008, "Hosted Tools candidate replaced before catalog");
+    }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     server.serializeAttachment({

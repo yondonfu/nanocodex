@@ -61,6 +61,38 @@ describe("HostedToolsBroker socket-owned protocol", () => {
     expect(activated).toBe(true);
   });
 
+  it("fences only unactivated candidates when a newer upgrade arrives", async () => {
+    const fixture = createFixture();
+    const active = fixture.socket();
+    await catalog(fixture.broker, active);
+    const staleCandidate = fixture.socket();
+    const client = new FakeSocket();
+    const server = new FakeSocket();
+    vi.stubGlobal("WebSocketPair", class {
+      readonly 0 = client.webSocket;
+      readonly 1 = server.webSocket;
+    });
+    vi.stubGlobal("Response", class {
+      readonly status: number;
+      readonly webSocket: WebSocket;
+      constructor(_body: null, init: { status: number; webSocket: WebSocket }) {
+        this.status = init.status;
+        this.webSocket = init.webSocket;
+      }
+    });
+
+    try {
+      const response = fixture.broker.upgrade("session:new");
+      expect(response.status).toBe(101);
+      expect(response.webSocket).toBe(client.webSocket);
+      expect(active.closed).toBeUndefined();
+      expect(staleCandidate.closed).toMatchObject({ code: 1008 });
+      expect(server.closed).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("durably dispatches an exact call and ACKs both the result and duplicate receipt", async () => {
     const fixture = createFixture();
     const host = fixture.socket();
