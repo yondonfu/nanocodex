@@ -13,12 +13,13 @@ import {
   createComputerFilesystem,
   type ComputerWorkspaceClient,
 } from "./computer-workspace";
-import type { ManagedComputerProvider } from "./computer-provider";
+import type { ComputerCapability, ManagedComputerProvider } from "./computer-provider";
 import { createCloudflareSshCommand } from "./cloudflare-ssh";
 import type { ManagedEgressConnectorId } from "./managed-egress";
 
 const MANAGED_SHELL_MAX_ENTRIES = 20_000;
 const MANAGED_SHELL_MAX_OUTPUT_TOKENS = 10_000;
+const MAX_NATIVE_TIMEOUT_MS = 120_000;
 const OUTPUT_TRUNCATION_NOTICE = "\n[output truncated by exec_command]";
 const ROOT = "/workspace";
 const COMMAND_SEPARATORS = new Set([";", "&&", "||", "|"]);
@@ -54,6 +55,7 @@ type ComputerProviderOption = ManagedComputerProvider
 type ExecCommandInput = Readonly<{
   cmd: string;
   max_output_tokens?: number;
+  timeout_ms?: number;
   sandbox_permissions?: string;
   shell?: string;
   tty?: boolean;
@@ -72,6 +74,10 @@ export type ManagedComputerRuntime = Readonly<{
   fetch: ManagedShellFetch;
   filesystem: Workspace;
   instructions: string;
+  nativeCompute: Readonly<{
+    available: boolean;
+    capabilities: readonly ComputerCapability[];
+  }>;
   tool: NamedTool;
 }>;
 
@@ -169,6 +175,12 @@ export async function createManagedComputerRuntime(options: Readonly<{
       instructions: provider === undefined
         ? shell.instructions
         : managedShellInstructions(shell.descriptor),
+      nativeCompute: Object.freeze({
+        available: provider !== undefined,
+        capabilities: provider === undefined
+          ? Object.freeze([] as ComputerCapability[])
+          : Object.freeze(["native-process"] as ComputerCapability[]),
+      }),
       tool: Object.freeze({ ...tool, dispose }),
     });
   } catch (error) {
@@ -177,7 +189,7 @@ export async function createManagedComputerRuntime(options: Readonly<{
   }
 }
 
-function createStickyExecutionTool(
+export function createStickyExecutionTool(
   virtualTool: NamedTool,
   provider: ManagedComputerProvider,
   safeCommands: ReadonlySet<string>,
@@ -219,6 +231,7 @@ function createStickyExecutionTool(
 
   return Object.freeze({
     ...virtualTool,
+    parameters: nativeTimeoutParameters(virtualTool.parameters),
     handler(input, context) {
       const run = () => execute(input, context);
       const result = executionTail.then(run, run);
@@ -256,6 +269,7 @@ async function executeNativeCommand(
     command: nativeCommand(input),
     cwd: resolveWorkdir(input.workdir),
     requirements: { capabilities: ["native-process"] },
+    ...(input.timeout_ms === undefined ? {} : { timeoutMs: nativeTimeoutMs(input.timeout_ms) }),
   });
   if (context.signal.aborted) throw context.signal.reason ?? new Error("exec_command cancelled");
   const combined = `${result.stdout}${result.stderr}`;
@@ -520,7 +534,41 @@ function execCommandInput(value: unknown): ExecCommandInput {
   if (input.shell !== undefined && typeof input.shell !== "string") {
     throw new TypeError("exec_command.shell must be a string");
   }
+  if (input.timeout_ms !== undefined) {
+    if (typeof input.timeout_ms !== "number") throw new TypeError("timeout_ms must be a number");
+    nativeTimeoutMs(input.timeout_ms);
+  }
   return input as ExecCommandInput;
+}
+
+export function nativeTimeoutMs(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_NATIVE_TIMEOUT_MS) {
+    throw new RangeError(`timeout_ms must be an integer between 1 and ${MAX_NATIVE_TIMEOUT_MS}`);
+  }
+  return value;
+}
+
+export function managedNativeComputeInstruction(available: boolean): string {
+  return available
+    ? "A configured native-process provider is available through exec_command for commands the virtual shell cannot run."
+    : "No native-process provider is configured. Bounded Just Bash is the complete local execution boundary.";
+}
+
+function nativeTimeoutParameters(parameters: NamedTool["parameters"]): NamedTool["parameters"] {
+  const schema = parameters as Record<string, unknown>;
+  const properties = schema.properties && typeof schema.properties === "object"
+    ? schema.properties as Record<string, unknown>
+    : {};
+  return Object.freeze({
+    ...schema,
+    properties: Object.freeze({
+      ...properties,
+      timeout_ms: Object.freeze({
+        type: "integer", minimum: 1, maximum: MAX_NATIVE_TIMEOUT_MS,
+        description: "Native-process timeout in milliseconds; omit to use the provider default.",
+      }),
+    }),
+  }) as NamedTool["parameters"];
 }
 
 function nativeCommand(input: ExecCommandInput): string {

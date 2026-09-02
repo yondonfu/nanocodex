@@ -37,7 +37,7 @@ import {
 } from "./capacity";
 import { fetchResponseWithDeadline, withHardDeadline } from "./deadline";
 import { drainRuntimeForDeletion } from "./deletion-runtime";
-import { createManagedComputerRuntime } from "./computer-runtime";
+import { createManagedComputerRuntime, managedNativeComputeInstruction } from "./computer-runtime";
 import {
   configuredComputerProvider,
   registerConfiguredComputerOutboundContext,
@@ -4688,6 +4688,7 @@ export class DurableAgentSession extends DurableComputerSession {
           commands: computer.descriptor.commands,
           custom_commands: computer.descriptor.customCommands,
           limits: computer.descriptor.limits,
+          native_compute: computer.nativeCompute,
           pty: computer.descriptor.pty,
           sessions: computer.descriptor.sessions,
           sandbox_escalation: computer.descriptor.sandboxEscalation,
@@ -4799,7 +4800,7 @@ export class DurableAgentSession extends DurableComputerSession {
             "GitHub, Gmail, Google Drive, and other account connectors are unavailable in shared rooms.",
             "Never claim to have performed an external action unless its tool completed successfully, and never expose internal runtime, routing, credential, or correlation identifiers.",
             computer.instructions,
-            "No process sandbox is attached. Bounded Just Bash is the complete local execution boundary.",
+            managedNativeComputeInstruction(computer.nativeCompute.available),
           ].join("\n\n")
           : [
             "You are Nanocodex running as a durable managed agent on Cloudflare Workers.",
@@ -4812,7 +4813,7 @@ export class DurableAgentSession extends DurableComputerSession {
             "Use accountInfo only when the user asks about account state or an operation fails because its authorization is unclear. Do not call accountInfo before an explicit gh, git, curl, or other shell command. Those commands use transparent authenticated egress when the current grant permits it. accountInfo is a tool, not a shell command.",
             "Use account_connectors when the user asks to connect, reconnect, inspect, or disconnect an account service. For connect results with authorization_required, return the exact authorization_url as a Markdown link. Never claim the account is connected until a later list reports connected=true.",
             computer.instructions,
-            "No process sandbox is attached. Bounded Just Bash is the complete local execution boundary.",
+            managedNativeComputeInstruction(computer.nativeCompute.available),
             MEMORY_INSTRUCTIONS,
           ].join("\n\n"),
         tools: preparedTools ?? cloudTools,
