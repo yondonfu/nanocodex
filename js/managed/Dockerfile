@@ -1,7 +1,7 @@
 FROM docker.io/cloudflare/sandbox:0.12.9
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends cargo rustc \
+    && apt-get install -y --no-install-recommends cargo python3 rustc \
     && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 3000
