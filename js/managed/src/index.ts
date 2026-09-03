@@ -17,6 +17,7 @@ import type {
 import { Agent as CloudflareAgent } from "nanocodex/cloudflare";
 import { imageGeneration, updatePlan, viewImage, web } from "nanocodex/tools";
 import { managedCodeEvaluator } from "./code-evaluator";
+import { OneTimeTicketStore } from "./one-time-ticket";
 import {
   connectedManagedAccountMcps,
   createDefaultManagedTools,
@@ -212,6 +213,9 @@ const CLEANUP_RETRY_ATTEMPT_KEY = "nanocodex:cleanup-retry-attempt";
 const DURABILITY_EXPORTED_KEY = "nanocodex:durability-exported";
 const DURABILITY_IMPORT_STATE_KEY = "nanocodex:durability-import-state";
 const DURABILITY_IMPORT_RECEIPT_KEY = "nanocodex:durability-import-receipt";
+const TOOL_HOST_TICKET_KEY = "nanocodex:tool-host-ticket";
+const TOOL_HOST_TICKET_TTL_MS = 15_000;
+const TOOL_HOST_TICKET = /^[A-Za-z0-9_-]{43}$/;
 const CREDENTIAL_BINDING_PREPARE_TIMEOUT_MS = 60_000;
 const DEFAULT_OWNERSHIP_IO_TIMEOUT_MS = 10_000;
 const DEFAULT_MULTIPLAYER_IO_TIMEOUT_MS = 10_000;
@@ -585,6 +589,47 @@ function forwardedPrincipal(headers: Headers): Readonly<{
     return undefined;
   }
   return { ownerId, organizationId, teamId, authorizationEpoch, authorization };
+}
+
+function ticketedToolHostRequest(
+  request: Request,
+  url: URL,
+  resource: string,
+): string | undefined {
+  if (resource !== "tool-host"
+    || request.method !== "GET"
+    || request.headers.get("upgrade")?.toLowerCase() !== "websocket") return undefined;
+  return exactTicketQuery(url);
+}
+
+function exactTicketQuery(url: URL): string | undefined {
+  if ([...url.searchParams.keys()].some((key) => key !== "ticket" && key !== "public_origin")
+    || url.searchParams.getAll("ticket").length !== 1
+    || url.searchParams.getAll("public_origin").length > 1) return undefined;
+  const ticket = url.searchParams.get("ticket");
+  return ticket !== null && TOOL_HOST_TICKET.test(ticket) ? ticket : undefined;
+}
+
+function toolHostTicketPrincipal(value: unknown): ReturnType<typeof forwardedPrincipal> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).length !== 5
+    || !isUserId(record.ownerId)
+    || typeof record.organizationId !== "string" || !UUID.test(record.organizationId)
+    || typeof record.teamId !== "string" || !UUID.test(record.teamId)
+    || typeof record.authorizationEpoch !== "number"
+    || !Number.isSafeInteger(record.authorizationEpoch) || record.authorizationEpoch < 1) return undefined;
+  try {
+    return {
+      ownerId: record.ownerId,
+      organizationId: record.organizationId,
+      teamId: record.teamId,
+      authorizationEpoch: record.authorizationEpoch,
+      authorization: parseTurnAuthorization(JSON.stringify(record.authorization)),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function parseTurnAuthorization(encoded: string): TurnAuthorization {
@@ -1059,6 +1104,15 @@ export default {
     }
     const agentId = match[1]!;
     const resource = match[2] ?? "";
+    const ticket = ticketedToolHostRequest(request, url, resource);
+    if (ticket !== undefined) {
+      const stub = env.NANOCODEX_SESSIONS.getByName(agentId);
+      const query = new URLSearchParams({ ticket, public_origin: url.origin });
+      return stub.fetch(
+        `https://session.internal/tool-host?${query}`,
+        new Request(request),
+      );
+    }
     const principal = await authenticate(request, env, url);
     if (!principal) return json({ error: "unauthorized" }, { status: 401 });
     const routedTurnId = resource.match(/^turns\/([^/]+)/)?.[1];
@@ -1085,6 +1139,19 @@ export default {
     const sessionHeaders = new Headers(request.headers);
     forwardPrincipalAssertions(sessionHeaders, principal);
     const publicOrigin = `public_origin=${encodeURIComponent(url.origin)}`;
+    if (resource === "tool-host/ticket") {
+      if (request.method !== "POST" || url.search !== "") {
+        return json({ error: "invalid_tool_host_ticket_request" }, { status: 400 });
+      }
+      if (!principal.capabilities.includes("agents:write")
+        || !principal.capabilities.includes("tools:use")) {
+        return json({ error: "forbidden" }, { status: 403 });
+      }
+      return stub.fetch("https://session.internal/tool-host-ticket", {
+        method: "POST",
+        headers: sessionHeaders,
+      });
+    }
     if (resource === "ws" || resource === "tool-host" || resource === "device-host") {
       if (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
         return new Response("Expected WebSocket upgrade", { status: 426 });
@@ -1545,7 +1612,19 @@ export class DurableAgentSession extends DurableComputerSession {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const ownerAssertion = request.headers.get(SESSION_OWNER_ASSERTION);
+    let asserted = forwardedPrincipal(request.headers);
+    if (!asserted && request.method === "GET" && url.pathname === "/tool-host") {
+      const ticket = exactTicketQuery(url);
+      if (ticket !== undefined) {
+        const value = await new OneTimeTicketStore(
+          this.ctx.storage,
+          TOOL_HOST_TICKET_KEY,
+          TOOL_HOST_TICKET_TTL_MS,
+        ).consume(ticket);
+        asserted = toolHostTicketPrincipal(value);
+      }
+    }
+    const ownerAssertion = asserted?.ownerId ?? null;
     let turnAuthorization: TurnAuthorization = { capabilities: [] };
     if (request.method === "GET" && url.pathname === "/connect-existence") {
       const asserted = forwardedPrincipal(request.headers);
@@ -1562,8 +1641,7 @@ export class DurableAgentSession extends DurableComputerSession {
       }
       return new Response(null, { status: 204 });
     }
-    if (ownerAssertion !== null) {
-      const asserted = forwardedPrincipal(request.headers);
+    if (asserted !== undefined) {
       const session = this.#session();
       if (!asserted || !session
         || asserted.ownerId !== session.owner_id
@@ -1573,6 +1651,19 @@ export class DurableAgentSession extends DurableComputerSession {
         return json({ error: "not_found" }, { status: 404 });
       }
       turnAuthorization = asserted.authorization;
+    }
+    if (request.method === "POST" && url.pathname === "/tool-host-ticket") {
+      if (!asserted) return json({ error: "not_found" }, { status: 404 });
+      if (!asserted.authorization.capabilities.includes("agents:write")
+        || !asserted.authorization.capabilities.includes("tools:use")) {
+        return json({ error: "forbidden" }, { status: 403 });
+      }
+      const issued = await new OneTimeTicketStore(
+        this.ctx.storage,
+        TOOL_HOST_TICKET_KEY,
+        TOOL_HOST_TICKET_TTL_MS,
+      ).issue(asserted);
+      return json(issued);
     }
     if (request.method === "PUT" && url.pathname === "/credential-binding") {
       if (this.#deleting || this.#deleted) return new Response(null, { status: 409 });
