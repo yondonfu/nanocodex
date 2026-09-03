@@ -4,7 +4,7 @@ import { configuredHosts, sandboxOutbound } from "../src/sandbox-outbound-auth";
 describe("sandbox outbound authentication", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("injects service-provided headers outside the container and caches them", async () => {
+  it("reauthorizes every request before injecting service-provided headers", async () => {
     const upstream = vi.fn(async (request: Request) => new Response(JSON.stringify({
       authorization: request.headers.get("authorization"),
       visibleRequestHeader: request.headers.get("x-visible"),
@@ -15,7 +15,7 @@ describe("sandbox outbound authentication", () => {
       async fetch() {
         calls += 1;
         return Response.json({
-          headers: { authorization: "Basic injected-secret" }, expiresAt: Date.now() + 60_000,
+          headers: { authorization: `Basic injected-secret-${calls}` }, expiresAt: Date.now() + 60_000,
         }, { headers: { "cache-control": "no-store" } });
       },
     } as unknown as Fetcher;
@@ -24,11 +24,14 @@ describe("sandbox outbound authentication", () => {
       NANOCODEX_COMPUTE_OUTBOUND_AUTH_HOSTS: "git.example.test",
     };
     const request = new Request("https://git.example.test/repo.git", { headers: { "x-visible": "yes" } });
-    for (let index = 0; index < 2; index += 1) {
+    for (let index = 1; index <= 2; index += 1) {
       const response = await sandboxOutbound(request, env, { containerId: "container-1", className: "Sandbox" });
-      expect(await response.json()).toEqual({ authorization: "Basic injected-secret", visibleRequestHeader: "yes" });
+      expect(await response.json()).toEqual({
+        authorization: `Basic injected-secret-${index}`,
+        visibleRequestHeader: "yes",
+      });
     }
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
     expect(upstream).toHaveBeenCalledTimes(2);
   });
 

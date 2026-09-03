@@ -1,7 +1,6 @@
 import { ContainerProxy, Sandbox as CloudflareSandbox } from "@cloudflare/sandbox";
 
 const MAX_RESPONSE_BYTES = 16 * 1024;
-const EXPIRY_SKEW_MS = 15_000;
 
 export type SandboxOutboundAuthEnv = Readonly<{
   NANOCODEX_COMPUTE_OUTBOUND_AUTH?: Fetcher;
@@ -10,8 +9,7 @@ export type SandboxOutboundAuthEnv = Readonly<{
 }>;
 
 type OutboundContext = Readonly<{ containerId: string; className: string }>;
-type CachedHeaders = Readonly<{ headers: Readonly<Record<string, string>>; expiresAt: number }>;
-const authCache = new Map<string, CachedHeaders>();
+type AuthorizationHeaders = Readonly<{ headers: Readonly<Record<string, string>>; expiresAt: number }>;
 
 /** Generic outbound policy: configured hosts, opaque container identity, and header injection. */
 export async function sandboxOutbound(
@@ -56,10 +54,6 @@ export { ContainerProxy };
 
 async function headersFor(binding: Fetcher, containerId: string, host: string): Promise<Readonly<Record<string, string>> | null> {
   const now = Date.now();
-  const key = `${containerId}\n${host}`;
-  const cached = authCache.get(key);
-  if (cached && cached.expiresAt - now > EXPIRY_SKEW_MS) return cached.headers;
-  authCache.delete(key);
   const response = await binding.fetch("https://outbound-auth.internal/v1/authorize", {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
@@ -74,11 +68,10 @@ async function headersFor(binding: Fetcher, containerId: string, host: string): 
   try { value = JSON.parse(new TextDecoder().decode(bytes)); } catch { return null; }
   const parsed = authResponse(value, now);
   if (!parsed) return null;
-  authCache.set(key, parsed);
   return parsed.headers;
 }
 
-function authResponse(value: unknown, now: number): CachedHeaders | null {
+function authResponse(value: unknown, now: number): AuthorizationHeaders | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
   const expiresAt = typeof row.expiresAt === "string" ? Date.parse(row.expiresAt) : Number(row.expiresAt);
