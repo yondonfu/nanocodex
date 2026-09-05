@@ -107,6 +107,44 @@ impl ContextManager {
         }
     }
 
+    /// Evicts rejected discovery metadata without removing transcript items.
+    pub fn remove_rejected_tool_definition(&mut self, rejected: &serde_json::Value) -> usize {
+        let mut removed = 0;
+        let mut items = self.flattened_items();
+        for item in &mut items {
+            if let ResponseItem::ToolSearchOutput { tools, .. } = item {
+                tools.retain_mut(|tool| {
+                    if tool.as_value() == rejected {
+                        removed += 1;
+                        return false;
+                    }
+                    // Namespaces contain definitions; arbitrary schema fields do not.
+                    if tool.as_value()["type"] == "namespace" {
+                        let mut value = tool.as_value().clone();
+                        if let Some(children) =
+                            value.get_mut("tools").and_then(|v| v.as_array_mut())
+                        {
+                            let before = children.len();
+                            children.retain(|child| child != rejected);
+                            removed += before - children.len();
+                            if children.len() != before {
+                                if children.is_empty() {
+                                    return false;
+                                }
+                                *tool = value.into();
+                            }
+                        }
+                    }
+                    true
+                });
+            }
+        }
+        if removed > 0 {
+            self.replace_and_recompute(items, &[]);
+        }
+        removed
+    }
+
     pub fn replace_rejected_images(&mut self) -> usize {
         let mut replaced = 0;
         let mut items = self.flattened_items();
@@ -617,6 +655,62 @@ fn truncate_output_content(items: &mut Vec<FunctionOutputContent>, token_limit: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejected_discovery_repair_preserves_transcript_and_corrected_definitions() {
+        use serde_json::json;
+        let bad = json!({"type":"function", "name":"read", "parameters":{
+            "type":"object", "properties":{"limit":{"type":"integer"}}, "required":[]
+        }});
+        let mut fixed = bad.clone();
+        fixed["parameters"]["required"] = json!(["limit"]);
+        let mut context = ContextManager::new(vec![
+            serde_json::from_value(json!({"type":"tool_search_call", "id":"tsc-1",
+                "call_id":"search-1", "execution":"client", "arguments":{"query":"read"}
+            }))
+            .unwrap(),
+            serde_json::from_value(json!({"type":"tool_search_output", "id":"tso-1",
+                "call_id":"search-1", "status":"completed", "execution":"client",
+                "tools":[bad.clone(), fixed.clone(), {"type":"namespace", "name":"space",
+                    "description":"Keep this metadata", "tools":[bad.clone(), fixed.clone()]
+                }, {"type":"namespace", "name":"empty_after_repair", "tools":[bad.clone()]}]
+            }))
+            .unwrap(),
+            ResponseItem::message(
+                MessageRole::User,
+                [ContentItem::input_text("keep conversation")],
+            ),
+            serde_json::from_value(json!({"type":"function_call", "call_id":"read-1",
+                "name":"read", "arguments":"{}"
+            }))
+            .unwrap(),
+            ResponseItem::function_call_output(
+                "read-1".to_owned(),
+                FunctionOutputBody::Text("already applied".into()),
+            ),
+        ]);
+        let before = context.flattened_items();
+        assert_eq!(context.remove_rejected_tool_definition(&bad), 3);
+        let after = context.flattened_items();
+        assert_eq!(after.len(), before.len());
+        for index in [0, 2, 3, 4] {
+            assert_eq!(
+                serde_json::to_value(&after[index]).unwrap(),
+                serde_json::to_value(&before[index]).unwrap()
+            );
+        }
+        let output = serde_json::to_value(&after[1]).unwrap();
+        assert_eq!(output["id"], "tso-1");
+        assert_eq!(output["call_id"], "search-1");
+        assert_eq!(
+            output["tools"],
+            json!([fixed.clone(), {"type":"namespace", "name":"space",
+                "description":"Keep this metadata", "tools":[fixed]
+            }])
+        );
+        assert_eq!(context.remove_rejected_tool_definition(&bad), 0);
+        assert!(!context.prompt_items_with_repair().1);
+    }
 
     #[test]
     fn complete_prompt_reuses_the_history_without_repair() {

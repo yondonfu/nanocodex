@@ -274,6 +274,14 @@ where
                         }) {
                             session.conversation.replace_rejected_images();
                         }
+                        if let Some(rejected) = error
+                            .responses_error()
+                            .and_then(ResponsesError::rejected_tool_definition)
+                        {
+                            session
+                                .conversation
+                                .remove_rejected_tool_definition(rejected);
+                        }
                         session.conversation.commit_interrupted();
                         session.preserve_inherited_delta = false;
                     }

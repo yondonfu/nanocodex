@@ -204,6 +204,10 @@ impl ConversationState {
         self.managed.commit_interrupted();
     }
 
+    pub(super) fn remove_rejected_tool_definition(&mut self, rejected: &Value) -> usize {
+        self.managed.remove_rejected_tool_definition(rejected)
+    }
+
     pub(super) fn replace_rejected_images(&mut self) -> usize {
         self.managed.replace_rejected_images()
     }

@@ -290,6 +290,18 @@ impl ManagedSessionState {
         self.context.commit_tail();
     }
 
+    /// Removes exact rejected definitions from discovery history and invalidates
+    /// provider continuation so the next turn can discover corrected metadata.
+    #[doc(hidden)]
+    pub fn remove_rejected_tool_definition(&mut self, rejected: &serde_json::Value) -> usize {
+        let removed = self.context.remove_rejected_tool_definition(rejected);
+        if removed > 0 {
+            self.reset_for_full_request();
+            self.history_revision = self.history_revision.saturating_add(1);
+        }
+        removed
+    }
+
     /// Replaces image inputs after the provider rejects their encoded data.
     ///
     /// The returned count is the number of image parts replaced with a stable
