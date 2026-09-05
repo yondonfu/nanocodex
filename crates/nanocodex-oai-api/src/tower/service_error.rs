@@ -48,6 +48,17 @@ impl ResponsesServiceError {
         )
     }
 
+    pub(crate) fn with_request_input(self, request: &crate::ResponsesAttempt) -> Self {
+        match self.source {
+            ResponsesServiceErrorSource::Responses(source) => Self::responses(
+                source.with_request_input(request.input_items()),
+                self.phase,
+                self.connection_generation,
+            ),
+            _ => self,
+        }
+    }
+
     pub(crate) const fn event(
         source: EventError,
         phase: FailurePhase,

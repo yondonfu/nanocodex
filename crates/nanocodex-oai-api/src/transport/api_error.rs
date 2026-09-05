@@ -43,6 +43,26 @@ pub(super) fn api_error_has_code(event: &str, expected: &str) -> bool {
     event.error().and_then(|error| error.code.as_deref()) == Some(expected)
 }
 
+/// Resolve only structured schema-error paths, never names from provider prose.
+pub(super) fn rejected_tool_path(event: &str) -> Option<Vec<usize>> {
+    let event: ApiErrorEnvelope = serde_json::from_str(event).ok()?;
+    let error = event.error()?;
+    if error.code.as_deref() != Some("invalid_function_parameters") {
+        return None;
+    }
+    let mut path = error.param.as_deref()?.strip_prefix("input[")?;
+    let (index, rest) = path.split_once(']')?;
+    let mut indices = vec![index.parse().ok()?];
+    path = rest;
+    while let Some(rest) = path.strip_prefix(".tools[") {
+        let (index, rest) = rest.split_once(']')?;
+        indices.push(index.parse().ok()?);
+        path = rest;
+    }
+    (indices.len() >= 2 && (path == ".parameters" || path.starts_with(".parameters.")))
+        .then_some(indices)
+}
+
 pub(super) fn api_error_is_checkpoint_missing(event: &str) -> bool {
     let Ok(event) = serde_json::from_str::<ApiErrorEnvelope>(event) else {
         return false;
@@ -64,6 +84,7 @@ fn is_terminal_response_failure(code: &str) -> bool {
     matches!(
         code,
         "context_length_exceeded"
+            | "invalid_function_parameters"
             | "insufficient_quota"
             | "usage_not_included"
             | "cyber_policy"
@@ -117,6 +138,8 @@ struct ApiErrorDetail {
     message: Option<Box<str>>,
     #[serde(default)]
     retry_after: Option<f64>,
+    #[serde(default)]
+    param: Option<Box<str>>,
 }
 
 #[derive(Deserialize)]
