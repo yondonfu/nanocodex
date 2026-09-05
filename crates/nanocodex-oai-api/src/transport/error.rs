@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use super::api_error::{api_error_has_code, api_error_is_checkpoint_missing, retryable_api_error};
+use super::api_error::{
+    api_error_has_code, api_error_is_checkpoint_missing, rejected_tool_path, retryable_api_error,
+};
 
 /// Errors produced by the standard `OpenAI` Responses transports.
 ///
@@ -133,6 +135,14 @@ pub enum ResponsesError {
         /// Complete retained provider event.
         event: String,
     },
+    /// A schema rejection identified an exact discovered function definition.
+    #[error("Responses API rejected a discovered tool definition: {event}")]
+    RejectedToolDefinition {
+        /// Complete retained provider error envelope.
+        event: String,
+        /// Exact function metadata from the rejected physical request.
+        definition: Box<serde_json::Value>,
+    },
     /// Sending or reading an HTTPS request failed.
     #[error("Responses HTTPS request failed: {detail}")]
     HttpRequest {
@@ -244,6 +254,7 @@ impl ResponsesError {
             Self::Api { .. } => "api",
             Self::ContextWindowExceeded { .. } => "context_window_exceeded",
             Self::InvalidImageRequest { .. } => "invalid_image_request",
+            Self::RejectedToolDefinition { .. } => "rejected_tool_definition",
             Self::HttpRequest { timeout: true, .. } => "https_timeout",
             Self::HttpRequest { .. } => "https_transport",
             Self::HttpRejected { status: 429, .. } => "https_rate_limit",
@@ -263,6 +274,54 @@ impl ResponsesError {
     #[must_use]
     pub const fn is_context_window_exceeded(&self) -> bool {
         matches!(self, Self::ContextWindowExceeded { .. })
+    }
+
+    /// Returns the exact rejected discovery metadata, when unambiguously identified.
+    #[must_use]
+    pub fn rejected_tool_definition(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::RejectedToolDefinition { definition, .. } => Some(definition),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn with_request_input<'a>(
+        self,
+        mut input: impl Iterator<Item = &'a crate::ResponseItem>,
+    ) -> Self {
+        let event = match &self {
+            Self::Api { event } => event,
+            Self::HttpRejected {
+                status: 400, body, ..
+            } => body,
+            _ => return self,
+        };
+        let Some(path) = rejected_tool_path(event) else {
+            return self;
+        };
+        let Some(crate::ResponseItem::ToolSearchOutput { tools, .. }) = input.nth(path[0]) else {
+            return self;
+        };
+        let Some(definition) = tools.get(path[1]) else {
+            return self;
+        };
+        let mut definition = definition.as_value();
+        for index in &path[2..] {
+            if definition["type"] != "namespace" {
+                return self;
+            }
+            let Some(nested) = definition.get("tools").and_then(|tools| tools.get(*index)) else {
+                return self;
+            };
+            definition = nested;
+        }
+        if definition["type"] != "function" || !definition["parameters"].is_object() {
+            return self;
+        }
+        Self::RejectedToolDefinition {
+            event: event.clone(),
+            definition: Box::new(definition.clone()),
+        }
     }
 
     pub(crate) fn api_event(event: String) -> Self {
@@ -289,6 +348,78 @@ mod tests {
 
     use super::ResponsesError;
     use crate::transport::api_error::retryable_api_error;
+
+    #[test]
+    fn identifies_only_discovered_schema_rejections_from_structured_paths() {
+        use serde_json::json;
+        let bad = json!({"type":"function", "name":"read", "parameters":{"type":"object"}});
+        let search: crate::ResponseItem = serde_json::from_value(json!({
+            "type":"tool_search_output", "call_id":"search-1", "status":"completed",
+            "execution":"client", "tools":[bad.clone(), {
+                "type":"namespace", "name":"space", "tools":[bad]
+            }]
+        }))
+        .unwrap();
+        let message = crate::ResponseItem::message(crate::MessageRole::User, []);
+        let input = [message, search];
+        for param in [
+            "input[1].tools[0].parameters",
+            "input[1].tools[1].tools[0].parameters.required",
+        ] {
+            for envelope in [
+                json!({"error":{"code":"invalid_function_parameters", "param":param}}),
+                json!({"type":"response.failed", "response":{"error":{
+                    "code":"invalid_function_parameters", "param":param
+                }}}),
+            ] {
+                for http in [false, true] {
+                    let error = if http {
+                        ResponsesError::HttpRejected {
+                            status: 400,
+                            body: envelope.to_string(),
+                            retry_after: None,
+                        }
+                    } else {
+                        ResponsesError::Api {
+                            event: envelope.to_string(),
+                        }
+                    }
+                    .with_request_input(input.iter());
+                    assert_eq!(error.rejected_tool_definition(), Some(&bad));
+                    assert!(error.retry_advice().is_none());
+                }
+            }
+        }
+        for param in [
+            "tools[0].parameters",
+            "input[0].tools[0].parameters",
+            "input[8].tools[0].parameters",
+            "input[1].tools[9].parameters",
+            "input[1].tools[1].parameters",
+            "input[1].tools[0].name",
+            "input[-1].tools[0].parameters",
+            "input[1].tools[0].parameters_extra",
+            "",
+        ] {
+            let error = ResponsesError::Api {
+                event: json!({"error":{
+                    "code":"invalid_function_parameters", "param":param
+                }})
+                .to_string(),
+            }
+            .with_request_input(input.iter());
+            assert!(error.rejected_tool_definition().is_none(), "{param}");
+        }
+        let unrelated = ResponsesError::Api {
+            event: json!({"error":{
+                "code":"invalid_request_error", "param":"input[1].tools[0].parameters",
+                "message":"invalid_function_parameters"
+            }})
+            .to_string(),
+        }
+        .with_request_input(input.iter());
+        assert!(unrelated.rejected_tool_definition().is_none());
+    }
 
     #[test]
     fn handshake_rejection_retains_provider_retry_delay() {

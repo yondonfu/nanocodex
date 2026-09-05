@@ -298,7 +298,8 @@ impl ResponsesService {
             self.run_websocket(&mut guard, request, started_at).await
         } else {
             https::run(self, &mut guard, request, started_at).await
-        };
+        }
+        .map_err(|error| error.with_request_input(request));
         guard.complete();
         drop(guard);
         tracing::Span::current().record(
