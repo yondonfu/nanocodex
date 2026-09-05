@@ -356,7 +356,7 @@ mod tests {
         let search: crate::ResponseItem = serde_json::from_value(json!({
             "type":"tool_search_output", "call_id":"search-1", "status":"completed",
             "execution":"client", "tools":[bad.clone(), {
-                "type":"namespace", "name":"space", "tools":[bad.clone()]
+                "type":"namespace", "name":"space", "tools":[bad]
             }]
         }))
         .unwrap();
